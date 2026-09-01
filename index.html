@@ -257,6 +257,8 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
 </style>
 
 <style>
+.appendrow{display:flex;align-items:center;gap:7px;margin-top:10px;font-size:12.5px;color:var(--ink-2);cursor:pointer}
+.appendrow input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 /* 会员看板专用补充样式（不改动共用的 core.css） */
 .alertbar{display:flex;flex-direction:column;gap:4px;margin:0 0 14px;padding:12px 16px;border-radius:12px;
   background:color-mix(in srgb, var(--s2) 12%, var(--surface));
@@ -485,6 +487,7 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
     <h2>导入 AirScript 数据</h2>
     <p>在 WPS 多维表格右上角「更多 → 脚本 → AirScript 脚本」中运行会员台账汇总脚本，把控制台输出的 JSON 全选复制，粘贴到下面。</p>
     <textarea id="jsonInput" placeholder='{"meta":{...},"detail":[...]}'></textarea>
+        <label class="appendrow"><input type="checkbox" id="appendMode"> 追加到已导入的数据（把各战区分别导出的结果合并成全战区视图）</label>
     <div class="msg" id="importMsg"></div>
     <div class="acts"><button class="btn" id="btnCancel">取消</button><button class="btn primary" id="btnConfirm">导入</button></div>
   </div>
@@ -536,13 +539,27 @@ var DASH = (function(){
   function ratio(a, b){ return b ? (a/b) : 0; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 
-  /* WPS 日期可能是 ISO 串 / "yyyy/MM/dd" 文本 / Excel 序列号 */
+  /* WPS 日期可能是 ISO 串 / "yyyy/MM/dd" 文本 / Excel 序列号（数字或数字字符串） */
+  // Excel 序列号换算出的是一个 UTC 时刻；必须用 UTC 分量还原日历日，
+  // 否则在东八区读 46265.72（=17:16Z）会被算成第二天。
+  function fromSerial(n){
+    var d = new Date(Math.round((n - 25569) * 86400 * 1000));
+    if (isNaN(d.getTime())) return null;
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  // 合理的序列号区间：约 1954-01-01 ~ 2064-01-01，避免把"1"这种轮次号误当日期
+  function isSerial(n){ return isFinite(n) && n >= 20000 && n <= 60000; }
   function toDate(v){
     if (v==null||v==='') return null;
-    if (typeof v === 'number') return new Date(Math.round((v-25569)*86400*1000));
-    var m = String(v).match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (typeof v === 'number') return isSerial(v) ? fromSerial(v) : null;
+    var s = String(v).trim();
+    if (/^\d+(\.\d+)?$/.test(s)){
+      var n = parseFloat(s);
+      return isSerial(n) ? fromSerial(n) : null;
+    }
+    var m = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
     if (m) return new Date(+m[1], +m[2]-1, +m[3]);
-    var d = new Date(v);
+    var d = new Date(s);
     return isNaN(d.getTime())?null:d;
   }
   function dateStr(v){
@@ -1107,7 +1124,7 @@ var DASH = (function(){
   };
 })();
 </script>
-<script>window.__AIRSCRIPT__ = "/* ============================================================\n   会员客户台账｜看板数据导出（AirScript · 只读）\n   放在任意一个战区管理系统的脚本编辑器里直接运行。\n   - 按【字段名】读取，字段顺序被调整不影响结果\n   - 只读源表：会员客户台账，不依赖任何统计表、合并表\n   - 输出分段打印（每段 700 字），因为脚本日志面板会把超长的单行截断。\n     运行完在日志区全选复制（Cmd/Ctrl+A → Cmd/Ctrl+C），\n     整段粘进看板的「导入 AirScript 数据」即可，看板会自动拼接。\n   ============================================================ */\n\nvar LEDGER_KEY = '会员客户台账';\n// ZONE 留空则自动从表名推断\nvar ZONE = '';\n\nvar FIELDS = ['订单号','部门','组别','员工','引流渠道','轮次','轮次负责人','客户姓名','客户分类','出单类型',\n  '地址区域','转介绍','订单金额','是否对接','是否观课','最新沟通日期','当下客户状态',\n  '首轮是否成交','首轮成交金额','二轮是否成交','二轮成交金额','三轮是否成交','三轮成交金额',\n  '往期单量','往期金额','总金额','广告费','创建时间'];\n\nvar CHUNK = 700;\n\n// 返回所有匹配的表：单战区文档只有一张，总管理系统里每个战区各一张，全部导出\nfunction findSheetsByKey(key){\n  var n = Application.Sheets.Count, out = [];\n  for (var i = 1; i <= n; i++){\n    var s = Application.Sheets.Item(i);\n    if (s.Name && s.Name.indexOf(key) >= 0 && s.Name.indexOf('统计') < 0 && s.Name.indexOf('📊') < 0) out.push(s);\n  }\n  return out;\n}\n\n// ⚠️ 本脚本要求脚本环境 AirScript 2.0（新建脚本时在 + 右侧的下拉里选）。\n// 在 1.0 环境下 GetFields() 返回的 f.name 是 Promise，会变成 \"[object Promise]\"，\n// 导致字段名->id 的映射整体错位、取到完全错误的列；而 1.0 的沙箱又缺少可用的\n// Promise.all/async 支持，无法在脚本内绕开。所以统一用 2.0。\nfunction fieldMap(sheet){\n  var m = {};\n  sheet.GetFields().forEach(function(f){ m[String(f.name)] = f.id; });\n  return m;\n}\n\n// 源表缺字段时明确报出来，而不是静默返回空列\nfunction warnMissing(sheetName, fmap, fields){\n  var miss = fields.filter(function(n){ return !fmap[n]; });\n  if (miss.length) console.log('⚠️ ' + sheetName + ' 缺少字段：' + miss.join('、'));\n}\n\n// 关联/人员/选项字段的单元格是 DBCellValue：{ Value:[{id,str}], display, ... }\nfunction textOf(p){\n  if (p == null) return '';\n  if (typeof p !== 'object') {\n    var t = String(p);\n    // 兜底：任何被字符串化的对象（[object Promise] / [object Object]）都当空值丢掉\n    return /^\\[object /.test(t) ? '' : t;\n  }\n  var s = p.str || p.nickname || p.name || p.text || p.title || '';\n  s = String(s);\n  return /^\\[object /.test(s) ? '' : s;\n}\n\n// 单元格取值：两个脚本环境下都是同步的\n//   2.0 -> DBCellValue 对象 { Value:[{id,str}], display }\n//   1.0 -> 普通数组 / 字符串 / 数字\nfunction cellValue(sheet, row, fmap, name){\n  var fid = fmap[name];\n  if (!fid) return null;\n  try {\n    var v = sheet.RecordRange(row, fid).Value;\n    if (v == null) return null;\n    if (typeof v !== 'object') return v;\n    if (Array.isArray(v)){\n      return v.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n    }\n    if (Array.isArray(v.Value)){\n      var joined = v.Value.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n      return joined || (v.display || '');\n    }\n    if (v.Value !== undefined && typeof v.Value !== 'object') return v.Value;\n    return v.display || '';\n  } catch (e) { return null; }\n}\n\nfunction guessZone(name){\n  var m = String(name || '').match(/(.{1,4}战区)/);\n  return m ? m[1] : '';\n}\n\nfunction emit(str){\n  var total = Math.ceil(str.length / CHUNK);\n  console.log('==== 数据开始：共 ' + total + ' 段，请在日志区全选复制后粘进看板 ====');\n  for (var i = 0; i < total; i++){\n    console.log('@@' + (i + 1) + '@@' + str.substr(i * CHUNK, CHUNK) + '@@/@@');\n  }\n  console.log('==== 数据结束 ====');\n}\n\nfunction main(){\n  var sheets = findSheetsByKey(LEDGER_KEY);\n  if (!sheets.length){ console.log('未找到包含「' + LEDGER_KEY + '」的数据表'); return; }\n\n  var cols = ['战区'].concat(FIELDS);\n  var rows = [], srcs = [], zones = [];\n\n  sheets.forEach(function(sheet){\n    var zone = ZONE || guessZone(sheet.Name) || '本战区';\n    if (zones.indexOf(zone) < 0) zones.push(zone);\n    var fmap = fieldMap(sheet);\n    warnMissing(sheet.Name, fmap, FIELDS);\n    var total = sheet.RecordRange().Count, got = 0;\n    for (var r = 1; r <= total; r++){\n      var rec = [zone], hasData = false;\n      for (var i = 0; i < FIELDS.length; i++){\n        var v = cellValue(sheet, r, fmap, FIELDS[i]);\n        rec.push(v === undefined ? null : v);\n        // 创建时间是系统自动填的，不能当作\"这一行有数据\"的依据，否则空行也会被导出\n        if (FIELDS[i] !== '创建时间' && v !== null && v !== '' && v !== 0) hasData = true;\n      }\n      if (hasData){ rows.push(rec); got++; }\n    }\n    srcs.push(sheet.Name + '(' + got + '条)');\n  });\n\n  var payload = {\n    meta: { zone: zones.join('、') || '本战区', generatedAt: new Date().toISOString(), source: srcs.join(' + ') },\n    cols: cols,\n    rows: rows\n  };\n  emit(JSON.stringify(payload));\n  console.log('共 ' + rows.length + ' 条记录，涵盖战区：' + zones.join('、'));\n  return payload;\n}\n\nmain();\n";</script>
+<script>window.__AIRSCRIPT__ = "/* ============================================================\n   会员客户台账｜看板数据导出（AirScript · 只读）\n   放在任意一个战区管理系统的脚本编辑器里直接运行。\n   - 按【字段名】读取，字段顺序被调整不影响结果\n   - 只读源表：会员客户台账，不依赖任何统计表、合并表\n   - 输出分段打印（每段 700 字），因为脚本日志面板会把超长的单行截断。\n     运行完在日志区全选复制（Cmd/Ctrl+A → Cmd/Ctrl+C），\n     整段粘进看板的「导入 AirScript 数据」即可，看板会自动拼接。\n   ============================================================ */\n\nvar LEDGER_KEY = '会员客户台账';\n// ZONE 留空则自动从表名推断\nvar ZONE = '';\n\nvar FIELDS = ['订单号','部门','组别','员工','引流渠道','轮次','轮次负责人','客户姓名','客户分类','出单类型',\n  '地址区域','转介绍','订单金额','是否对接','是否观课','最新沟通日期','当下客户状态',\n  '首轮是否成交','首轮成交金额','二轮是否成交','二轮成交金额','三轮是否成交','三轮成交金额',\n  '往期单量','往期金额','总金额','广告费','创建时间'];\n\nvar CHUNK = 700;\n\n// 返回所有匹配的表：单战区文档只有一张，总管理系统里每个战区各一张，全部导出\nfunction findSheetsByKey(key){\n  var n = Application.Sheets.Count, out = [];\n  for (var i = 1; i <= n; i++){\n    var s = Application.Sheets.Item(i);\n    if (s.Name && s.Name.indexOf(key) >= 0 && s.Name.indexOf('统计') < 0 && s.Name.indexOf('📊') < 0) out.push(s);\n  }\n  return out;\n}\n\n// ⚠️ 本脚本要求脚本环境 AirScript 2.0（新建脚本时在 + 右侧的下拉里选）。\n// 在 1.0 环境下 GetFields() 返回的 f.name 是 Promise，会变成 \"[object Promise]\"，\n// 导致字段名->id 的映射整体错位、取到完全错误的列；而 1.0 的沙箱又缺少可用的\n// 字段名 -> 字段 id。总管理系统里的表是跨文档同步表，首次打开、元数据还没加载完时\n// f.name 会是一个 Promise，字符串化后变成 \"[object Promise]\"，会让整张映射表错位、\n// 取到完全不相干的列。这里做自检并明确报出来，绝不静默出错。\nfunction fieldMap(sheet){\n  var m = {}, pending = 0;\n  sheet.GetFields().forEach(function(f){\n    var nm = String(f.name);\n    if (nm.indexOf('[object ') === 0) pending++;\n    m[nm] = f.id;\n  });\n  if (pending){\n    console.log('⛔ ' + sheet.Name + ' 有 ' + pending + ' 个字段名尚未加载完成（同步表首次打开时会这样）。');\n    console.log('   请先在左侧点开这些数据表、等表格完全加载出来，然后重新运行本脚本。');\n    throw new Error('字段名未就绪：' + sheet.Name);\n  }\n  return m;\n}\n\n// 源表缺字段时明确报出来，而不是静默返回空列\nfunction warnMissing(sheetName, fmap, fields){\n  var miss = fields.filter(function(n){ return !fmap[n]; });\n  if (miss.length) console.log('⚠️ ' + sheetName + ' 缺少字段：' + miss.join('、'));\n}\n\n// 关联/人员/选项字段的单元格是 DBCellValue：{ Value:[{id,str}], display, ... }\nfunction textOf(p){\n  if (p == null) return '';\n  if (typeof p !== 'object') {\n    var t = String(p);\n    // 兜底：任何被字符串化的对象（[object Promise] / [object Object]）都当空值丢掉\n    return /^\\[object /.test(t) ? '' : t;\n  }\n  var s = p.str || p.nickname || p.name || p.text || p.title || '';\n  s = String(s);\n  return /^\\[object /.test(s) ? '' : s;\n}\n\n// 单元格取值：两个脚本环境下都是同步的\n//   2.0 -> DBCellValue 对象 { Value:[{id,str}], display }\n//   1.0 -> 普通数组 / 字符串 / 数字\nfunction cellValue(sheet, row, fmap, name){\n  var fid = fmap[name];\n  if (!fid) return null;\n  try {\n    var v = sheet.RecordRange(row, fid).Value;\n    if (v == null) return null;\n    if (typeof v !== 'object') return v;\n    if (Array.isArray(v)){\n      return v.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n    }\n    if (Array.isArray(v.Value)){\n      var joined = v.Value.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n      return joined || (v.display || '');\n    }\n    if (v.Value !== undefined && typeof v.Value !== 'object') return v.Value;\n    return v.display || '';\n  } catch (e) { return null; }\n}\n\nfunction guessZone(name){\n  var m = String(name || '').match(/(.{1,4}战区)/);\n  return m ? m[1] : '';\n}\n\nfunction emit(str){\n  var total = Math.ceil(str.length / CHUNK);\n  console.log('==== 数据开始：共 ' + total + ' 段，请在日志区全选复制后粘进看板 ====');\n  for (var i = 0; i < total; i++){\n    console.log('@@' + (i + 1) + '@@' + str.substr(i * CHUNK, CHUNK) + '@@/@@');\n  }\n  console.log('==== 数据结束 ====');\n}\n\nfunction main(){\n  var sheets = findSheetsByKey(LEDGER_KEY);\n  if (!sheets.length){ console.log('未找到包含「' + LEDGER_KEY + '」的数据表'); return; }\n\n  var cols = ['战区'].concat(FIELDS);\n  var rows = [], srcs = [], zones = [];\n\n  sheets.forEach(function(sheet){\n    var zone = ZONE || guessZone(sheet.Name) || '本战区';\n    if (zones.indexOf(zone) < 0) zones.push(zone);\n    var fmap = fieldMap(sheet);\n    warnMissing(sheet.Name, fmap, FIELDS);\n    var total = sheet.RecordRange().Count, got = 0;\n    for (var r = 1; r <= total; r++){\n      var rec = [zone], hasData = false;\n      for (var i = 0; i < FIELDS.length; i++){\n        var v = cellValue(sheet, r, fmap, FIELDS[i]);\n        rec.push(v === undefined ? null : v);\n        // 创建时间是系统自动填的，不能当作\"这一行有数据\"的依据，否则空行也会被导出\n        if (FIELDS[i] !== '创建时间' && v !== null && v !== '' && v !== 0) hasData = true;\n      }\n      if (hasData){ rows.push(rec); got++; }\n    }\n    srcs.push(sheet.Name + '(' + got + '条)');\n  });\n\n  var payload = {\n    meta: { zone: zones.join('、') || '本战区', generatedAt: new Date().toISOString(), source: srcs.join(' + ') },\n    cols: cols,\n    rows: rows\n  };\n  emit(JSON.stringify(payload));\n  console.log('共 ' + rows.length + ' 条记录，涵盖战区：' + zones.join('、'));\n  return payload;\n}\n\nmain();\n";</script>
 <script>
 (function(){
   "use strict";
@@ -1817,7 +1834,10 @@ var DASH = (function(){
     renderAll();
   }
 
-  function load(payload){
+  // append=true 时把新数据接到已有数据后面，用于把各战区分别导出的结果合并成全战区视图
+  function load(payload, append){
+    var prevRows = append ? state.rows.slice() : [];
+    var prevMeta = append ? (state.meta || {}) : null;
     var detail = payload.detail||[];
     state.rows = detail.map(function(r){
       var o={}; for (var k in r) o[k]=r[k];
@@ -1832,6 +1852,13 @@ var DASH = (function(){
       o.__blank = isBlankRow(r);
       return o;
     });
+    if (append && prevRows.length){
+      state.rows = prevRows.concat(state.rows);
+      var srcs = [prevMeta.source, (payload.meta||{}).source].filter(Boolean);
+      payload = { meta: { zone:'', generatedAt: (payload.meta||{}).generatedAt,
+                          source: srcs.join('　＋　') },
+                  detail: state.rows };
+    }
     state.blankCount = state.rows.filter(function(r){ return r.__blank; }).length;
     state.metricRows = state.rows.filter(function(r){ return !r.__blank; });
     state.meta = payload.meta||{};
@@ -1887,7 +1914,8 @@ var DASH = (function(){
     if (!txt){ $('importMsg').textContent='请先粘贴 WPS 脚本日志（「一键复制日志」的整段内容）'; $('importMsg').className='msg err'; return; }
     try{
       var obj = parseImport(txt);
-      var info = load(obj);
+      var appendOn = !!($('appendMode') && $('appendMode').checked && state.rows.length);
+      var info = load(obj, appendOn);
       $('importMsg').textContent='导入成功：'+info.zones.join('、')+'　共 '+info.total+' 条记录'+
         (info.blank ? '（'+info.metric+' 条参与指标，'+info.blank+' 条空行仅进明细）' : '');
       $('importMsg').className='msg ok';
