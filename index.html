@@ -256,6 +256,22 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
 }
 </style>
 
+<style>
+/* 会员看板专用补充样式（不改动共用的 core.css） */
+.alertbar{display:flex;flex-direction:column;gap:4px;margin:0 0 14px;padding:12px 16px;border-radius:12px;
+  background:color-mix(in srgb, var(--s2) 12%, var(--surface));
+  border:1px solid color-mix(in srgb, var(--s2) 42%, var(--line));
+  border-left:4px solid var(--s2);font-size:12.5px;line-height:1.62;color:var(--ink-2)}
+.alertbar b{color:var(--ink);font-weight:700}
+.alertbar>b:first-child{font-size:13px;letter-spacing:.01em}
+.hintbar{margin:0 0 10px;padding:9px 13px;border-radius:10px;font-size:12px;line-height:1.6;color:var(--ink-2);
+  background:var(--surface-2);border:1px solid var(--line)}
+.hintbar b{color:var(--ink);font-weight:700}
+.dnote{margin-top:8px;font-size:11.5px;line-height:1.55;color:var(--ink-3);text-align:center;max-width:230px}
+/* 29 列明细：让表格按内容撑开，横向滚动条常显可用 */
+#view-detail table{width:max-content;min-width:100%}
+</style>
+
 <div class="app">
   <aside class="nav">
     <div class="brand">
@@ -333,6 +349,7 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
 
       <!-- 总览 -->
       <section class="view" id="view-overview" hidden>
+        <div class="alertbar" id="ovAlert" hidden></div>
         <div class="kpis" id="ovKpis"></div>
         <div class="strip" id="ovStrip" style="margin-bottom:14px"></div>
         <div class="row12">
@@ -346,8 +363,9 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
           </section>
         </div>
         <section class="card full">
-          <header><h2>轮次走势</h2><span class="note">柱：成交总金额　线：成交率 / 观课率</span>
+          <header><h2>轮次走势</h2><span class="note" id="ovTrendNote">柱：成交总金额　线：成交率 / 观课率</span>
             <div class="right"><div class="legend" id="ovTrendLegend"></div></div></header>
+          <div class="hintbar" id="ovTrendHint" hidden></div>
           <div id="ovTrend"></div>
         </section>
         <div class="row12">
@@ -423,6 +441,7 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
 
       <!-- 组织效能 -->
       <section class="view" id="view-org" hidden>
+        <div class="alertbar" id="orgAlert" hidden></div>
         <section class="card full">
           <header><h2>效能维度</h2>
             <div class="right"><div class="chips" id="orgDimChips">
@@ -1088,13 +1107,183 @@ var DASH = (function(){
   };
 })();
 </script>
-<script>window.__AIRSCRIPT__ = "/* ============================================================\n   会员客户台账｜看板数据导出（AirScript · 只读）\n   放在任意一个战区管理系统的脚本编辑器里直接运行。\n   - 按【字段名】读取，字段顺序被调整不影响结果\n   - 只读源表：会员客户台账，不依赖任何统计表、合并表\n   - 输出分段打印（每段 700 字），因为脚本日志面板会把超长的单行截断。\n     运行完在日志区全选复制（Cmd/Ctrl+A → Cmd/Ctrl+C），\n     整段粘进看板的「导入 AirScript 数据」即可，看板会自动拼接。\n   ============================================================ */\n\nvar LEDGER_KEY = '会员客户台账';\n// ZONE 留空则自动从表名推断\nvar ZONE = '';\n\nvar FIELDS = ['订单号','部门','组别','员工','引流渠道','轮次','轮次负责人','客户姓名','客户分类','出单类型',\n  '地址区域','转介绍','订单金额','是否对接','是否观课','最新沟通日期','当下客户状态',\n  '首轮是否成交','首轮成交金额','二轮是否成交','二轮成交金额','三轮是否成交','三轮成交金额',\n  '往期单量','往期金额','总金额','广告费','创建时间'];\n\nvar CHUNK = 700;\n\n// 返回所有匹配的表：单战区文档只有一张，总管理系统里每个战区各一张，全部导出\nfunction findSheetsByKey(key){\n  var n = Application.Sheets.Count, out = [];\n  for (var i = 1; i <= n; i++){\n    var s = Application.Sheets.Item(i);\n    if (s.Name && s.Name.indexOf(key) >= 0 && s.Name.indexOf('统计') < 0 && s.Name.indexOf('📊') < 0) out.push(s);\n  }\n  return out;\n}\n\nfunction fieldMap(sheet){\n  var m = {};\n  sheet.GetFields().forEach(function(f){ m[f.name] = f.id; });\n  return m;\n}\n\n// 关联/人员/选项字段的单元格是 DBCellValue：{ Value:[{id,str}], display, ... }\nfunction textOf(p){\n  if (p == null) return '';\n  if (typeof p !== 'object') return String(p);\n  return p.str || p.nickname || p.name || p.text || p.title || '';\n}\n\nfunction cellValue(sheet, row, fmap, name){\n  var fid = fmap[name];\n  if (!fid) return null;\n  try {\n    var v = sheet.RecordRange(row, fid).Value;\n    if (v == null) return null;\n    if (typeof v !== 'object') return v;\n    if (Array.isArray(v)){\n      return v.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n    }\n    if (Array.isArray(v.Value)){\n      var joined = v.Value.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n      return joined || (v.display || '');\n    }\n    if (v.Value !== undefined && typeof v.Value !== 'object') return v.Value;\n    return v.display || '';\n  } catch (e) { return null; }\n}\n\nfunction guessZone(name){\n  var m = String(name || '').match(/(.{1,4}战区)/);\n  return m ? m[1] : '';\n}\n\nfunction emit(str){\n  var total = Math.ceil(str.length / CHUNK);\n  console.log('==== 数据开始：共 ' + total + ' 段，请在日志区全选复制后粘进看板 ====');\n  for (var i = 0; i < total; i++){\n    console.log('@@' + (i + 1) + '@@' + str.substr(i * CHUNK, CHUNK) + '@@/@@');\n  }\n  console.log('==== 数据结束 ====');\n}\n\nfunction main(){\n  var sheets = findSheetsByKey(LEDGER_KEY);\n  if (!sheets.length){ console.log('未找到包含「' + LEDGER_KEY + '」的数据表'); return; }\n\n  var cols = ['战区'].concat(FIELDS);\n  var rows = [], srcs = [], zones = [];\n  sheets.forEach(function(sheet){\n    var zone = ZONE || guessZone(sheet.Name) || '本战区';\n    if (zones.indexOf(zone) < 0) zones.push(zone);\n    var fmap = fieldMap(sheet);\n    var total = sheet.RecordRange().Count, got = 0;\n    for (var r = 1; r <= total; r++){\n      var rec = [zone], hasData = false;\n      for (var i = 0; i < FIELDS.length; i++){\n        var v = cellValue(sheet, r, fmap, FIELDS[i]);\n        rec.push(v === undefined ? null : v);\n        // 创建时间是系统自动填的，不能当作\"这一行有数据\"的依据，否则空行也会被导出\n        if (FIELDS[i] !== '创建时间' && v !== null && v !== '' && v !== 0) hasData = true;\n      }\n      if (hasData){ rows.push(rec); got++; }\n    }\n    srcs.push(sheet.Name + '(' + got + '条)');\n  });\n\n  var payload = {\n    meta: { zone: zones.join('、') || '本战区', generatedAt: new Date().toISOString(), source: srcs.join(' + ') },\n    cols: cols,\n    rows: rows\n  };\n  emit(JSON.stringify(payload));\n  console.log('共 ' + rows.length + ' 条记录');\n  return payload;\n}\n\nmain();\n";</script>
+<script>window.__AIRSCRIPT__ = "/* ============================================================\n   会员客户台账｜看板数据导出（AirScript · 只读）\n   放在任意一个战区管理系统的脚本编辑器里直接运行。\n   - 按【字段名】读取，字段顺序被调整不影响结果\n   - 只读源表：会员客户台账，不依赖任何统计表、合并表\n   - 输出分段打印（每段 700 字），因为脚本日志面板会把超长的单行截断。\n     运行完在日志区全选复制（Cmd/Ctrl+A → Cmd/Ctrl+C），\n     整段粘进看板的「导入 AirScript 数据」即可，看板会自动拼接。\n   ============================================================ */\n\nvar LEDGER_KEY = '会员客户台账';\n// ZONE 留空则自动从表名推断\nvar ZONE = '';\n\nvar FIELDS = ['订单号','部门','组别','员工','引流渠道','轮次','轮次负责人','客户姓名','客户分类','出单类型',\n  '地址区域','转介绍','订单金额','是否对接','是否观课','最新沟通日期','当下客户状态',\n  '首轮是否成交','首轮成交金额','二轮是否成交','二轮成交金额','三轮是否成交','三轮成交金额',\n  '往期单量','往期金额','总金额','广告费','创建时间'];\n\nvar CHUNK = 700;\n\n// 返回所有匹配的表：单战区文档只有一张，总管理系统里每个战区各一张，全部导出\nfunction findSheetsByKey(key){\n  var n = Application.Sheets.Count, out = [];\n  for (var i = 1; i <= n; i++){\n    var s = Application.Sheets.Item(i);\n    if (s.Name && s.Name.indexOf(key) >= 0 && s.Name.indexOf('统计') < 0 && s.Name.indexOf('📊') < 0) out.push(s);\n  }\n  return out;\n}\n\n// ⚠️ 本脚本要求脚本环境 AirScript 2.0（新建脚本时在 + 右侧的下拉里选）。\n// 在 1.0 环境下 GetFields() 返回的 f.name 是 Promise，会变成 \"[object Promise]\"，\n// 导致字段名->id 的映射整体错位、取到完全错误的列；而 1.0 的沙箱又缺少可用的\n// Promise.all/async 支持，无法在脚本内绕开。所以统一用 2.0。\nfunction fieldMap(sheet){\n  var m = {};\n  sheet.GetFields().forEach(function(f){ m[String(f.name)] = f.id; });\n  return m;\n}\n\n// 源表缺字段时明确报出来，而不是静默返回空列\nfunction warnMissing(sheetName, fmap, fields){\n  var miss = fields.filter(function(n){ return !fmap[n]; });\n  if (miss.length) console.log('⚠️ ' + sheetName + ' 缺少字段：' + miss.join('、'));\n}\n\n// 关联/人员/选项字段的单元格是 DBCellValue：{ Value:[{id,str}], display, ... }\nfunction textOf(p){\n  if (p == null) return '';\n  if (typeof p !== 'object') {\n    var t = String(p);\n    // 兜底：任何被字符串化的对象（[object Promise] / [object Object]）都当空值丢掉\n    return /^\\[object /.test(t) ? '' : t;\n  }\n  var s = p.str || p.nickname || p.name || p.text || p.title || '';\n  s = String(s);\n  return /^\\[object /.test(s) ? '' : s;\n}\n\n// 单元格取值：两个脚本环境下都是同步的\n//   2.0 -> DBCellValue 对象 { Value:[{id,str}], display }\n//   1.0 -> 普通数组 / 字符串 / 数字\nfunction cellValue(sheet, row, fmap, name){\n  var fid = fmap[name];\n  if (!fid) return null;\n  try {\n    var v = sheet.RecordRange(row, fid).Value;\n    if (v == null) return null;\n    if (typeof v !== 'object') return v;\n    if (Array.isArray(v)){\n      return v.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n    }\n    if (Array.isArray(v.Value)){\n      var joined = v.Value.map(textOf).filter(function(x){ return x !== ''; }).join(',');\n      return joined || (v.display || '');\n    }\n    if (v.Value !== undefined && typeof v.Value !== 'object') return v.Value;\n    return v.display || '';\n  } catch (e) { return null; }\n}\n\nfunction guessZone(name){\n  var m = String(name || '').match(/(.{1,4}战区)/);\n  return m ? m[1] : '';\n}\n\nfunction emit(str){\n  var total = Math.ceil(str.length / CHUNK);\n  console.log('==== 数据开始：共 ' + total + ' 段，请在日志区全选复制后粘进看板 ====');\n  for (var i = 0; i < total; i++){\n    console.log('@@' + (i + 1) + '@@' + str.substr(i * CHUNK, CHUNK) + '@@/@@');\n  }\n  console.log('==== 数据结束 ====');\n}\n\nfunction main(){\n  var sheets = findSheetsByKey(LEDGER_KEY);\n  if (!sheets.length){ console.log('未找到包含「' + LEDGER_KEY + '」的数据表'); return; }\n\n  var cols = ['战区'].concat(FIELDS);\n  var rows = [], srcs = [], zones = [];\n\n  sheets.forEach(function(sheet){\n    var zone = ZONE || guessZone(sheet.Name) || '本战区';\n    if (zones.indexOf(zone) < 0) zones.push(zone);\n    var fmap = fieldMap(sheet);\n    warnMissing(sheet.Name, fmap, FIELDS);\n    var total = sheet.RecordRange().Count, got = 0;\n    for (var r = 1; r <= total; r++){\n      var rec = [zone], hasData = false;\n      for (var i = 0; i < FIELDS.length; i++){\n        var v = cellValue(sheet, r, fmap, FIELDS[i]);\n        rec.push(v === undefined ? null : v);\n        // 创建时间是系统自动填的，不能当作\"这一行有数据\"的依据，否则空行也会被导出\n        if (FIELDS[i] !== '创建时间' && v !== null && v !== '' && v !== 0) hasData = true;\n      }\n      if (hasData){ rows.push(rec); got++; }\n    }\n    srcs.push(sheet.Name + '(' + got + '条)');\n  });\n\n  var payload = {\n    meta: { zone: zones.join('、') || '本战区', generatedAt: new Date().toISOString(), source: srcs.join(' + ') },\n    cols: cols,\n    rows: rows\n  };\n  emit(JSON.stringify(payload));\n  console.log('共 ' + rows.length + ' 条记录，涵盖战区：' + zones.join('、'));\n  return payload;\n}\n\nmain();\n";</script>
 <script>
 (function(){
   "use strict";
-  var D = DASH, $ = D.$, num = D.num, rate = D.rate, cvar = D.cvar, isYes = D.isYes;
+  var D = DASH, $ = D.$, num = D.num, rate = D.rate, cvar = D.cvar;
   var STORE = 'wps_member_dash_v3';
-  var state = { rows:[], meta:{}, view:'overview', orgDim:'部门', dtFilter:'' };
+  var state = { rows:[], metricRows:[], blankCount:0, meta:{}, view:'overview', orgDim:'部门', dtFilter:'' };
+
+  /* ============================================================
+     数据清洗层 —— WPS 真实数据的脏情况都在这里收口
+     （core.js 是热线/会员共用的，不在这里改，只在本文件内加严）
+     ============================================================ */
+
+  /* 空值判定：""、null、undefined、"-"、"—"、"null" 都算「没填」。
+     注意 0 / "0" 不是空 —— 它是「填了 0」。 */
+  function isBlank(v){
+    if (v == null) return true;
+    if (typeof v === 'number') return !isFinite(v);
+    var s = String(v).trim();
+    return s === '' || s === '-' || s === '—' || s === '/' ||
+           s === 'null' || s === 'undefined' || s === 'NaN' || s === '[object Object]';
+  }
+  /* 求和口径：空按 0 处理（对的）——金额可能是数字、"0"、"1,200"、"¥800" */
+  function n0(v){ return isBlank(v) ? 0 : num(v); }
+  /* 分母口径：空不参与（"没填" ≠ "填了 0"） */
+  function has(v){ return !isBlank(v); }
+  /* 明确「填了且大于 0」 */
+  function pos(v){ return has(v) && num(v) > 0; }
+
+  /* ---- 日期：ISO 串 / "2026/8/31 17:26" 文本 / Excel 序列号（数字或字符串） ----
+     Excel 序列号必须用「本地时区 + 整数天」还原，
+     直接 (v-25569)*86400*1000 会因为小数部分（时分秒是 UTC）在东八区跨天，
+     46265.72 会被算成 9-01 而不是 8-31。 */
+  var SERIAL_MIN = 20000, SERIAL_MAX = 80000;   // 1954 ~ 2119 年，避开纯数字的编号
+  function fromSerial(n){
+    var d = new Date(1899, 11, 30);
+    d.setDate(d.getDate() + Math.floor(n));
+    return d;
+  }
+  function mDate(v){
+    if (isBlank(v)) return null;
+    if (typeof v === 'number'){
+      if (v >= SERIAL_MIN && v <= SERIAL_MAX) return fromSerial(v);
+      if (v >= 1e11) return new Date(v);              // 毫秒时间戳
+      if (v >= 1e9)  return new Date(v * 1000);       // 秒时间戳
+      return null;
+    }
+    var s = String(v).trim();
+    if (/^\d+(\.\d+)?$/.test(s)){                     // 数字被存成了字符串
+      var n = parseFloat(s);
+      if (n >= SERIAL_MIN && n <= SERIAL_MAX) return fromSerial(n);
+      if (n >= 1e11) return new Date(n);
+      if (n >= 1e9)  return new Date(n * 1000);
+      return null;
+    }
+    var d = D.toDate(s);
+    if (!d || isNaN(d.getTime())) return null;
+    if (d.getFullYear() < 1980 || d.getFullYear() > 2200) return null;  // 别把 1970 当成有效日期
+    return d;
+  }
+  function mDateStr(v){
+    var d = mDate(v);
+    if (!d) return '';
+    return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+  }
+
+  /* ---- 是否类字段：是/否、已成交、true、1、✓、√、空 …… 写法五花八门 ---- */
+  var NO_RE  = /^(否|无|未|没有|未成交|未对接|未观课|未购|false|no|n|f|×|✗|x|0)$/i;
+  var YES_RE = /^(是|是的|已|已成交|成交|已对接|对接|已观课|观课|已购|已购买|已签收|有|完成|已完成|true|yes|y|t|ok|✓|✔|√|☑)$/i;
+  function mYes(v){
+    if (v === true) return true;
+    if (v === false || v == null) return false;
+    if (typeof v === 'number') return isFinite(v) && v > 0;
+    var s = String(v).trim();
+    if (s === '') return false;
+    if (/^-?\d+(\.\d+)?$/.test(s)) return parseFloat(s) > 0;   // "1" / "0" / "2"
+    if (NO_RE.test(s)) return false;
+    if (YES_RE.test(s)) return true;
+    return D.isYes(s);
+  }
+
+  /* ---- 空行：除了「创建时间」「战区」（系统自动填的）之外全空 ---- */
+  var IGNORE_FOR_BLANK = {'创建时间':1, '战区':1};
+  function isBlankRow(r){
+    for (var k in r){
+      if (IGNORE_FOR_BLANK[k]) continue;
+      if (!isBlank(r[k])) return false;
+    }
+    return true;
+  }
+
+  /* ============================================================
+     导入解析 —— 错误信息要能指到具体位置
+     ============================================================ */
+  var CHUNK = 700;   // 与 AirScript 的分段长度一致，用于把字符偏移换算成段号
+  function parseImport(text){
+    var t = String(text || '').trim();
+    if (!t) throw new Error('内容为空。请在 WPS 脚本日志区 Ctrl/Cmd+A 全选、Ctrl/Cmd+C 复制后再粘贴。');
+
+    var joinedNote = '';
+    if (/@@\s*\d+\s*@@/.test(t)){
+      var re = /@@(\d+)@@([^]*?)@@\/@@/g, m, parts = [];
+      while ((m = re.exec(t)) !== null){
+        parts.push({ i: parseInt(m[1], 10), s: m[2].replace(/[\r\n]+/g, '') });
+      }
+      var openMarks = (t.match(/@@\d+@@/g) || []).length;
+      if (!parts.length){
+        throw new Error('发现 ' + openMarks + ' 个分段起始标记 @@n@@，但一个配套的结束标记 @@/@@ 都没找到。'
+          + '多半是只复制了日志的一部分 —— 请在日志区 Ctrl/Cmd+A 全选后重新复制。');
+      }
+      // 期望段数：优先取日志里「共 N 段」的提示，否则取见到的最大段号
+      var expect = null, em = t.match(/共\s*(\d+)\s*段/);
+      if (em) expect = parseInt(em[1], 10);
+      var have = {}, maxI = expect || 0;
+      parts.forEach(function(p){ have[p.i] = p.s; if (p.i > maxI) maxI = p.i; });
+      var missing = [];
+      for (var k = 1; k <= maxI; k++) if (have[k] == null) missing.push(k);
+      if (missing.length){
+        throw new Error('分段不完整：日志共 ' + maxI + ' 段，缺少第 ' +
+          (missing.length > 8 ? missing.slice(0,8).join('、') + ' … 等 ' + missing.length + ' 段' : missing.join('、') + ' 段') +
+          '（已拿到 ' + Object.keys(have).length + ' 段）。请回到日志区全选后重新复制整段内容，注意不要漏掉滚动区域外的行。');
+      }
+      var ordered = [];
+      for (var k2 = 1; k2 <= maxI; k2++) ordered.push(have[k2]);
+      t = ordered.join('');
+      joinedNote = '（已按顺序拼接 ' + maxI + ' 段）';
+    }
+
+    var i = t.indexOf('{'), j = t.lastIndexOf('}');
+    if (i < 0 || j <= i){
+      throw new Error('拼接后没找到 JSON 内容' + joinedNote + '。请确认复制的是脚本「运行后」的日志输出，而不是脚本源码或报错信息。');
+    }
+    var raw = t.slice(i, j + 1), obj;
+    try {
+      obj = JSON.parse(raw);
+    } catch(e){
+      var msg = String(e.message || e);
+      var pm = msg.match(/position\s+(\d+)/i);
+      var extra = '';
+      if (pm){
+        var p = parseInt(pm[1], 10);
+        var seg = Math.floor(p / CHUNK) + 1;
+        var from = Math.max(0, p - 70), to = Math.min(raw.length, p + 70);
+        extra = '：JSON 在第 ' + p + ' / ' + raw.length + ' 个字符处断开' +
+                (joinedNote ? '（大约落在第 ' + seg + ' 段里）' : '') + '。\n断点上下文：…' +
+                raw.slice(from, p) + '  ⟪断在这里⟫  ' + raw.slice(p, to) + '…\n' +
+                (joinedNote ? '常见原因：第 ' + seg + ' 段没复制全，或日志区把该段截断了。'
+                            : '常见原因：粘贴的不是完整的脚本日志输出，或内容被截断了。');
+      } else {
+        extra = '：' + msg;
+      }
+      throw new Error('JSON 解析失败' + extra);
+    }
+
+    // 列式 {meta,cols,rows} → 对象数组
+    if (obj.cols && obj.rows){
+      if (!Array.isArray(obj.cols)) throw new Error('payload.cols 不是数组，导出脚本版本可能不匹配。');
+      if (!Array.isArray(obj.rows)) throw new Error('payload.rows 不是数组，导出脚本版本可能不匹配。');
+      var bad = [];
+      obj.detail = obj.rows.map(function(r, ri){
+        var o = {};
+        if (!Array.isArray(r)){ bad.push(ri + 1); return o; }
+        if (r.length !== obj.cols.length) bad.push(ri + 1);
+        obj.cols.forEach(function(c, ci){ o[String(c)] = r[ci]; });
+        return o;
+      });
+      if (bad.length){
+        console.warn('[会员看板] 列数与表头不一致的行（已按位置尽力对齐）：第 ' + bad.slice(0, 20).join('、') + ' 行，共 ' + bad.length + ' 行');
+      }
+    }
+    if (!obj.detail || !obj.detail.length){
+      throw new Error('JSON 解析成功，但里面一条数据行都没有（rows / detail 为空）。'
+        + '请确认源表「会员客户台账」里有记录，且脚本没有把所有行都当成空行过滤掉。');
+    }
+    if (!Array.isArray(obj.detail)) throw new Error('payload.detail 不是数组。');
+    return obj;
+  }
 
   /* ---------------- 示例数据 ---------------- */
   function sample(){
@@ -1150,15 +1339,16 @@ var DASH = (function(){
       if (vals.indexOf(cur)>=0) sel.value=cur;
       sel.parentNode.hidden = vals.length===0;
     });
+    // 只有一个战区时才隐藏战区筛选；多战区必须让用户能筛
     if (D.uniqVals(rows,'战区').length<2) $('fZone').parentNode.hidden=true;
   }
   function filtered(){
     var from=$('fFrom').value, to=$('fTo').value, sels={};
     FILTERS.forEach(function(f){ sels[f[1]]=$(f[0]).value; });
     return state.rows.filter(function(r){
-      for (var k in sels){ if (sels[k] && String(r[k]||'')!==sels[k]) return false; }
+      for (var k in sels){ if (sels[k] && String(r[k]==null?'':r[k])!==sels[k]) return false; }
       if (from||to){
-        var ds=D.dateStr(r.创建时间);
+        var ds=r.__date;
         if (!ds) return false;
         if (from && ds<from) return false;
         if (to && ds>to) return false;
@@ -1168,31 +1358,44 @@ var DASH = (function(){
   }
 
   /* ---------------- 指标口径 ---------------- */
+  /* 成交金额：优先「总金额」；总金额为空或 0 时，回退为 首轮+二轮+三轮+往期 之和。
+     两条路径互斥（if / return），不会重复计算；总金额填了就完全信它，
+     没填才用分轮金额兜底，所以也不会漏算。 */
   function dealAmt(r){
-    var t = num(r.总金额);
-    if (t) return t;
-    return num(r.首轮成交金额)+num(r.二轮成交金额)+num(r.三轮成交金额)+num(r.往期金额);
+    if (has(r.总金额)){
+      var t = num(r.总金额);
+      if (t) return t;          // 总金额 = 0 视为「没成交额」，继续走兜底
+    }
+    return n0(r.首轮成交金额)+n0(r.二轮成交金额)+n0(r.三轮成交金额)+n0(r.往期金额);
+  }
+  /* 成交金额来自哪条路径 —— 用于自检与提示 */
+  function dealAmtSource(r){
+    return (has(r.总金额) && num(r.总金额)) ? '总金额' : '分轮求和';
   }
   function isDeal(r){
-    return isYes(r.首轮是否成交)||isYes(r.二轮是否成交)||isYes(r.三轮是否成交)||num(r.往期单量)>0||dealAmt(r)>0;
+    return mYes(r.首轮是否成交)||mYes(r.二轮是否成交)||mYes(r.三轮是否成交)||
+           pos(r.往期单量)||dealAmt(r)>0;
   }
+  function hasAd(r){ return pos(r.广告费); }
+
   function agg(rows){
     var s = {
       客户数: rows.length,
-      对接数: D.countIf(rows, function(r){ return isYes(r.是否对接); }),
-      观课数: D.countIf(rows, function(r){ return isYes(r.是否观课); }),
-      首轮客户: D.countIf(rows, function(r){ return isYes(r.首轮是否成交)||num(r.首轮成交金额)>0; }),
-      二轮客户: D.countIf(rows, function(r){ return isYes(r.二轮是否成交)||num(r.二轮成交金额)>0; }),
-      三轮客户: D.countIf(rows, function(r){ return isYes(r.三轮是否成交)||num(r.三轮成交金额)>0; }),
-      往期客户: D.countIf(rows, function(r){ return num(r.往期单量)>0||num(r.往期金额)>0; }),
+      对接数: D.countIf(rows, function(r){ return mYes(r.是否对接); }),
+      观课数: D.countIf(rows, function(r){ return mYes(r.是否观课); }),
+      首轮客户: D.countIf(rows, function(r){ return mYes(r.首轮是否成交)||pos(r.首轮成交金额); }),
+      二轮客户: D.countIf(rows, function(r){ return mYes(r.二轮是否成交)||pos(r.二轮成交金额); }),
+      三轮客户: D.countIf(rows, function(r){ return mYes(r.三轮是否成交)||pos(r.三轮成交金额); }),
+      往期客户: D.countIf(rows, function(r){ return pos(r.往期单量)||pos(r.往期金额); }),
       成交客户: D.countIf(rows, isDeal),
-      转介绍数: D.countIf(rows, function(r){ return isYes(r.转介绍); }),
-      首轮金额: D.sum(rows,'首轮成交金额'),
-      二轮金额: D.sum(rows,'二轮成交金额'),
-      三轮金额: D.sum(rows,'三轮成交金额'),
-      往期金额: D.sum(rows,'往期金额'),
-      往期单量: D.sum(rows,'往期单量'),
-      广告费: D.sum(rows,'广告费')
+      转介绍数: D.countIf(rows, function(r){ return mYes(r.转介绍); }),
+      首轮金额: rows.reduce(function(a,r){ return a+n0(r.首轮成交金额); },0),
+      二轮金额: rows.reduce(function(a,r){ return a+n0(r.二轮成交金额); },0),
+      三轮金额: rows.reduce(function(a,r){ return a+n0(r.三轮成交金额); },0),
+      往期金额: rows.reduce(function(a,r){ return a+n0(r.往期金额); },0),
+      往期单量: rows.reduce(function(a,r){ return a+n0(r.往期单量); },0),
+      广告费:   rows.reduce(function(a,r){ return a+n0(r.广告费); },0),
+      广告费行数: D.countIf(rows, hasAd)
     };
     s.成交金额 = rows.reduce(function(a,r){ return a+dealAmt(r); }, 0);
     s.对接率 = rate(s.对接数, s.客户数);
@@ -1209,20 +1412,86 @@ var DASH = (function(){
     s.转介绍率 = rate(s.转介绍数, s.客户数);
     return s;
   }
+
+  /* ---- 广告费填报覆盖度 ----
+     全局投产比 = 全部战区成交额 ÷ 部分战区广告费 → 虚高得离谱，必须显式警示 */
+  function adCoverage(rows){
+    var g = D.groupBy(rows, function(r){ return r.战区; });
+    var zones = g.keys, withAd = zones.filter(function(z){ return g.map[z].some(hasAd); });
+    var rowsWithAd = D.countIf(rows, hasAd);
+    return {
+      zones: zones.length,
+      zonesWithAd: withAd.length,
+      missZones: zones.filter(function(z){ return !g.map[z].some(hasAd); }),
+      rows: rows.length,
+      rowsWithAd: rowsWithAd,
+      hasAny: rowsWithAd > 0,
+      partial: rowsWithAd > 0 && (withAd.length < zones.length || rowsWithAd < rows.length)
+    };
+  }
+  function adWarnText(c){
+    if (!c.hasAny) return '本次筛选下没有任何广告费填报，投产比 / 获客成本无法计算';
+    if (!c.partial) return '';
+    var bits = [];
+    if (c.zonesWithAd < c.zones) bits.push('仅 ' + c.zonesWithAd + '/' + c.zones + ' 个战区填报了广告费');
+    bits.push('仅 ' + c.rowsWithAd + '/' + c.rows + ' 行有广告费');
+    return '⚠ ' + bits.join('，');
+  }
+  function paintAdAlert(host, c){
+    if (!host) return;
+    if (!c.hasAny){
+      host.hidden = false;
+      host.innerHTML = '<b>投入类指标不可用</b><span>当前筛选下 ' + c.rows +
+        ' 行全部没有填报广告费，<b>投产比、获客成本、成交获客成本</b>无法计算，已显示为「—」' +
+        '（不要读成 0）。</span>';
+      return;
+    }
+    if (!c.partial){ host.hidden = true; host.textContent=''; return; }
+    host.hidden = false;
+    host.innerHTML = '<b>投入类指标口径警示</b>' +
+      '<span>' + D.esc(adWarnText(c)) + '。分子（成交金额）来自<b>全部</b>参与计算的行，' +
+      '分母（广告费）只来自其中一部分，因此下面的<b>投产比、获客成本、成交获客成本</b>会被系统性高估（投产比偏高、成本偏低）。' +
+      (c.missZones.length ? '未填报广告费的战区：' + D.esc(c.missZones.join('、')) + '。' : '') +
+      '建议先在顶部筛选到已填报广告费的战区再看这三项。</span>';
+  }
+
   function byDim(rows, dim){
-    var g = D.groupBy(rows, function(r){ return r[dim]; });
+    var g = D.groupBy(rows, function(r){ return isBlank(r[dim]) ? '' : r[dim]; });
     return g.keys.map(function(k){ var a = agg(g.map[k]); a.name=k; a.rows=g.map[k]; return a; });
   }
   function rounds(rows){ return D.uniqVals(rows,'轮次'); }
-  /* 颜色按实体固定，不随筛选/排名改变 */
   function tint(list, dimKey){
-    var order = D.uniqVals(state.rows, dimKey);
+    var order = D.uniqVals(state.metricRows, dimKey);
     return list.map(function(r){ r.color = D.colorFor(r.name, order); return r; });
+  }
+  /* 占比类图表：过滤掉「未填写」，并把过滤掉的行数说明清楚 */
+  function shareRows(rows, dim, valFn){
+    var list = byDim(rows, dim);
+    var kept = [], droppedRows = 0, droppedVal = 0;
+    list.forEach(function(d){
+      var v = valFn(d);
+      if (d.name === '未填写'){ droppedRows += d.客户数; droppedVal += num(v); return; }
+      if (num(v) > 0) kept.push({name:d.name, value:v});
+      else droppedRows += 0;
+    });
+    return { rows: tint(kept, dim), droppedRows: droppedRows, droppedVal: droppedVal };
+  }
+  function donutWithNote(host, sr, opts){
+    if (!sr.rows.length) return false;
+    D.donut(host, sr.rows, opts);
+    if (sr.droppedRows > 0){
+      var col = host.lastElementChild;
+      if (col) col.appendChild(D.el('div','dnote','占比已过滤「未填写」' + D.fmtInt(sr.droppedRows) + ' 行' +
+        (opts && opts.money && sr.droppedVal ? '（' + D.money(sr.droppedVal) + '）' : '') + '，不计入下方百分比'));
+    }
+    return true;
   }
 
   /* ---------------- 视图 ---------------- */
   function renderOverview(rows){
-    var s = agg(rows);
+    var s = agg(rows), cov = adCoverage(rows), warn = adWarnText(cov);
+    paintAdAlert($('ovAlert'), cov);
+
     D.renderKpis($('ovKpis'), [
       {label:'成交金额', text:D.money(s.成交金额), color:cvar(0), hero:true,
        sub:'首轮 '+D.money(s.首轮金额)+' · 复购 '+D.money(s.二轮金额+s.三轮金额)+' · 往期 '+D.money(s.往期金额),
@@ -1230,14 +1499,17 @@ var DASH = (function(){
       {label:'客户总数', value:s.客户数, color:cvar(3), sub:'成交 '+D.fmtInt(s.成交客户)+' 人'},
       {label:'成交率', text:D.pct(s.成交率), color:cvar(2), sub:'成交客户 ÷ 客户总数'},
       {label:'客单价', text:D.money(s.客单价), color:cvar(4), sub:'成交金额 ÷ 成交客户'},
-      {label:'广告费', text:D.money(s.广告费), color:cvar(1), sub:'获客成本 '+D.money(s.获客成本)},
-      {label:'投产比', text:s.投产.toFixed(2), unit:'x', color:cvar(5), sub:'成交金额 ÷ 广告费'}
+      {label:'广告费', text:cov.hasAny?D.money(s.广告费):'—', color:cvar(1),
+       sub:'获客成本 '+(cov.hasAny?D.money(s.获客成本):'—')+(warn?'　'+warn:'')},
+      {label:'投产比', text:cov.hasAny?s.投产.toFixed(2):'—', unit:cov.hasAny?'x':'', color:cvar(5),
+       sub:'成交金额 ÷ 广告费'+(warn?'　'+warn:'')}
     ]);
     D.renderStrip($('ovStrip'), [
       {label:'对接率', text:D.pct(s.对接率)}, {label:'观课率', text:D.pct(s.观课率)},
       {label:'观课→成交', text:D.pct(s.观课成交率)}, {label:'首轮成交率', text:D.pct(s.首轮成交率)},
       {label:'二轮复购率', text:D.pct(s.二轮复购率)}, {label:'三轮复购率', text:D.pct(s.三轮复购率)},
-      {label:'成交获客成本', text:D.money(s.成交成本)}, {label:'转介绍率', text:D.pct(s.转介绍率)}
+      {label:'成交获客成本'+(warn?' ⚠':''), text:cov.hasAny?D.money(s.成交成本):'—'},
+      {label:'转介绍率', text:D.pct(s.转介绍率)}
     ]);
     D.funnel($('ovFunnel'), [
       {stage:'建档客户',value:s.客户数},{stage:'已对接',value:s.对接数},
@@ -1251,7 +1523,12 @@ var DASH = (function(){
       {name:'三轮成交', value:s.三轮金额, color:cvar(2)},
       {name:'往期成交', value:s.往期金额, color:cvar(4)}
     ].filter(function(r){ return r.value>0; }), {title:'成交金额构成', centerLabel:'成交总额', money:true});
-    /* 同卡片再放一张客户数构成：宽屏下 donutgrid 会自动排成两列，不至于半屏只有一个环 */
+    var partSum = s.首轮金额+s.二轮金额+s.三轮金额+s.往期金额;
+    if (s.成交金额 - partSum > 0.5){
+      var c0 = host.lastElementChild;
+      if (c0) c0.appendChild(D.el('div','dnote','另有 '+D.money(s.成交金额-partSum)+
+        ' 只填了「总金额」、未拆分到各轮，已计入成交总额但不在上面的构成里'));
+    }
     D.donut(host, [
       {name:'首轮成交', value:s.首轮客户, color:cvar(0)},
       {name:'二轮成交', value:s.二轮客户, color:cvar(1)},
@@ -1259,12 +1536,30 @@ var DASH = (function(){
       {name:'往期成交', value:s.往期客户, color:cvar(4)}
     ].filter(function(r){ return r.value>0; }), {title:'成交客户构成', centerLabel:'成交人次'});
 
-    var rs = rounds(rows);
-    var series = [
-      {name:'成交金额', type:'bar', color:cvar(0), money:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).成交金额; })},
-      {name:'成交率', type:'line', color:cvar(1), percent:true, area:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).成交率; })},
-      {name:'观课率', type:'line', color:cvar(2), percent:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).观课率; })}
-    ];
+    /* ---- 轮次走势：各战区轮次编号口径不同（K90 / G98 / S1 / Z4 / 1），
+       多战区时串成一条轴会失真，改为按战区拆成多条线并给出提示 ---- */
+    var rs = rounds(rows), zones = D.uniqVals(rows,'战区'), series, hint = $('ovTrendHint'), tnote = $('ovTrendNote');
+    if (zones.length > 1){
+      if (tnote) tnote.textContent = '每条线 = 一个战区的成交总金额（轮次口径不互通）';
+      series = zones.slice(0,6).map(function(z,i){
+        return {name:z+' 成交金额', type:'line', color:cvar(i), money:true,
+          values: rs.map(function(k){ return agg(rows.filter(function(r){ return r.战区===z && r.轮次===k; })).成交金额; })};
+      });
+      if (hint){
+        hint.hidden = false;
+        hint.innerHTML = '⚠ 当前包含 <b>'+zones.length+'</b> 个战区（'+D.esc(zones.join('、'))+'），' +
+          '各战区的轮次编号口径不同（如 '+D.esc(rs.slice(0,5).join(' / '))+'），串在同一根横轴上会失真。' +
+          '已按战区拆成多条线；<b>建议先在顶部筛选单个战区</b>再看走势。';
+      }
+    } else {
+      if (tnote) tnote.textContent = '柱：成交总金额　线：成交率 / 观课率';
+      series = [
+        {name:'成交金额', type:'bar', color:cvar(0), money:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).成交金额; })},
+        {name:'成交率', type:'line', color:cvar(1), percent:true, area:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).成交率; })},
+        {name:'观课率', type:'line', color:cvar(2), percent:true, values:rs.map(function(k){ return agg(rows.filter(function(r){return r.轮次===k;})).观课率; })}
+      ];
+      if (hint){ hint.hidden = true; hint.innerHTML=''; }
+    }
     D.comboChart($('ovTrend'), rs, series);
     D.legend($('ovTrendLegend'), series);
 
@@ -1275,30 +1570,29 @@ var DASH = (function(){
     D.barsH($('ovDeptBars'), dd.map(function(d){return d.name;}), bs, data, {stacked:true, money:true});
     D.legend($('ovDeptLegend'), bs);
 
-    D.bubbles($('ovBubble'), dd.filter(function(d){ return d.广告费>0||d.成交金额>0; }).map(function(d){
+    D.bubbles($('ovBubble'), dd.filter(function(d){ return d.广告费>0; }).map(function(d){
       return {x:d.广告费, y:d.成交金额, r:Math.max(1,d.客户数), name:d.name, sub:'投产 '+d.投产.toFixed(2)+'x'};
     }), {xLabel:'广告费', yLabel:'成交金额', rLabel:'客户数', moneyX:true, moneyY:true, diagonal:true});
 
-    /* 占比结构 —— 部门维度的 5 张环形图 */
+    /* 占比结构 —— 部门维度，「未填写」不进饼图 */
     var dh = $('ovDonuts'); D.clear(dh);
     function pick(key, opts){
-      D.donut(dh, tint(dd.map(function(d){ return {name:d.name, value:d[key]}; })
-        .filter(function(r){ return num(r.value)>0; }), '部门'), opts);
+      donutWithNote(dh, shareRows(rows,'部门',function(d){ return d[key]; }), opts);
     }
     pick('广告费',   {title:'广告费占比（按部门）',   centerLabel:'总广告费', money:true});
     pick('成交金额', {title:'成交金额占比（按部门）', centerLabel:'成交总额', money:true});
     pick('客户数',   {title:'客户数占比（按部门）',   centerLabel:'客户总数'});
     pick('成交客户', {title:'成交客户占比（按部门）', centerLabel:'成交客户'});
 
-    /* 第 5 图：投产比是比率，各部门相加无意义，故用「净产出（成交金额−广告费）」作扇区，中心显示综合投产比 */
-    var netRows = tint(dd.map(function(d){
+    /* 投产比是比率，各部门相加无意义，故用「净产出（成交金额−广告费）」作扇区 */
+    var netRows = tint(dd.filter(function(d){ return d.name!=='未填写' && d.广告费>0; }).map(function(d){
       return {name:d.name, value:d.成交金额 - d.广告费, roi:d.投产};
     }).filter(function(r){ return num(r.value)>0; }), '部门');
     if (netRows.length){
       D.donut(dh, netRows, {title:'投产贡献占比（净产出）', centerLabel:'综合投产', money:true});
       var col = dh.lastElementChild;
       var cv = col.querySelector('.donut-center .v'), cl = col.querySelector('.donut-center .l');
-      if (cv) cv.textContent = s.投产.toFixed(2) + 'x';
+      if (cv) cv.textContent = (cov.hasAny? s.投产.toFixed(2)+'x' : '—');
       if (cl) cl.textContent = '综合投产';
       var legRows = netRows.slice().sort(function(a,b){ return num(b.value)-num(a.value); });
       Array.prototype.forEach.call(col.querySelectorAll('.dlegend .r'), function(node, i){
@@ -1306,11 +1600,12 @@ var DASH = (function(){
         var n = node.querySelector('.n');
         if (n) n.textContent = r.name + ' · ' + num(r.roi).toFixed(2) + 'x';
       });
+      if (warn) col.appendChild(D.el('div','dnote', warn + '，只统计了已填报广告费的部门'));
     }
   }
 
   function renderDeal(rows){
-    var s = agg(rows);
+    var s = agg(rows), cov = adCoverage(rows), warn = adWarnText(cov);
     D.renderKpis($('dlKpis'), [
       {label:'首轮成交客户', value:s.首轮客户, color:cvar(0), sub:'成交率 '+D.pct(s.首轮成交率)},
       {label:'首轮成交金额', text:D.money(s.首轮金额), color:cvar(0), sub:'客单 '+D.money(D.ratio(s.首轮金额,s.首轮客户))},
@@ -1325,7 +1620,6 @@ var DASH = (function(){
       {stage:'客户总数',value:s.客户数},{stage:'首轮成交',value:s.首轮客户},
       {stage:'二轮成交',value:s.二轮客户},{stage:'三轮成交',value:s.三轮客户}
     ], 'var(--s1)');
-    // 往期成交并非首轮的下游，单独用一条说明补充，不塞进漏斗造成 >100% 的环节率
     $('dlFunnel').appendChild(D.el('div','empty-chart',
       '另有往期成交 '+D.fmtInt(s.往期客户)+' 人 / '+D.money(s.往期金额)+'（不在上述串行链路内）'));
 
@@ -1348,15 +1642,15 @@ var DASH = (function(){
     D.legend($('dlStageLegend'), series2);
 
     var host = $('dlTypeDonut'); D.clear(host);
-    var ot = tint(byDim(rows,'出单类型').map(function(d){ return {name:d.name, value:d.成交金额}; }).filter(function(r){return r.value>0;}),'出单类型');
-    if (ot.length) D.donut(host, ot, {title:'出单类型（成交金额）', centerLabel:'成交总额', money:true});
-    var cat = tint(byDim(rows,'客户分类').map(function(d){ return {name:d.name, value:d.成交金额}; }).filter(function(r){return r.value>0;}),'客户分类');
-    if (cat.length) D.donut(host, cat, {title:'客户分类（成交金额）', centerLabel:'成交总额', money:true});
-    if (!ot.length && !cat.length) host.appendChild(D.el('div','empty-chart','当前筛选下没有成交数据'));
+    var okA = donutWithNote(host, shareRows(rows,'出单类型',function(d){ return d.成交金额; }),
+      {title:'出单类型（成交金额）', centerLabel:'成交总额', money:true});
+    var okB = donutWithNote(host, shareRows(rows,'客户分类',function(d){ return d.成交金额; }),
+      {title:'客户分类（成交金额）', centerLabel:'成交总额', money:true});
+    if (!okA && !okB) host.appendChild(D.el('div','empty-chart','当前筛选下没有成交数据'));
 
     var dd = byDim(rows,'部门'), data={};
     dd.forEach(function(d){ data[d.name]={客单价:Math.round(d.客单价), 获客成本:Math.round(d.获客成本)}; });
-    var bs2=[{name:'客单价',key:'客单价',color:cvar(0),money:true},{name:'获客成本',key:'获客成本',color:cvar(1),money:true}];
+    var bs2=[{name:'客单价',key:'客单价',color:cvar(0),money:true},{name:'获客成本'+(warn?'（部分部门未填广告费）':''),key:'获客成本',color:cvar(1),money:true}];
     D.barsMulti($('dlAov'), dd.map(function(d){return d.name;}), bs2, data);
     D.clear($('dlAovLegend'));
   }
@@ -1364,8 +1658,7 @@ var DASH = (function(){
   function renderStructure(rows){
     var host = $('stDonuts'); D.clear(host);
     [['客户分类','客户分类分布'],['引流渠道','引流渠道分布'],['地址区域','地址区域分布'],['当下客户状态','客户状态分布']].forEach(function(sp){
-      var rowsD = tint(byDim(rows, sp[0]).map(function(d){ return {name:d.name, value:d.客户数}; }).filter(function(r){ return r.value>0; }), sp[0]);
-      if (rowsD.length) D.donut(host, rowsD, {title:sp[1], centerLabel:'客户数'});
+      donutWithNote(host, shareRows(rows, sp[0], function(d){ return d.客户数; }), {title:sp[1], centerLabel:'客户数'});
     });
     if (!host.children.length) host.appendChild(D.el('div','empty-chart','当前筛选下没有画像字段'));
 
@@ -1401,8 +1694,19 @@ var DASH = (function(){
     {key:'投产', label:'投产(x)', type:'num'},
     {key:'二轮复购率', label:'二轮复购率', type:'pct'}
   ];
+  /* core.js 的 dataTable 合计行对非 money/pct 列一律走 fmtInt，
+     会把投产比 0.48x 四舍五入成 0。core.js 是共用文件不能改，
+     这里在渲染后把这一格补回正确的两位小数（排序会重渲染，用 observer 兜住）。*/
+  var ROI_IDX = 0, orgRoiText = '—', orgFootObs = null;
+  ORG_COLS.forEach(function(c,i){ if (c.key==='投产') ROI_IDX = i; });
+  function patchOrgFoot(){
+    var tds = $('orgTfoot').querySelectorAll('td');
+    if (tds[ROI_IDX] && tds[ROI_IDX].textContent !== orgRoiText) tds[ROI_IDX].textContent = orgRoiText;
+  }
   function renderOrg(rows){
     var dim = state.orgDim, list = byDim(rows, dim);
+    var cov = adCoverage(rows);
+    paintAdAlert($('orgAlert'), cov);
     var data={};
     list.forEach(function(d){ data[d.name]={成交金额:d.成交金额, 广告费:d.广告费}; });
     var bs=[{name:'成交金额',key:'成交金额',color:cvar(0),money:true},{name:'广告费',key:'广告费',color:cvar(1),money:true}];
@@ -1410,84 +1714,142 @@ var DASH = (function(){
 
     D.ranking($('orgRankAmt'), list.map(function(d){ return {name:d.name, value:d.成交金额, sub:D.fmtInt(d.成交客户)+' 单'}; }), {money:true, color:cvar(0), valueLabel:'成交金额'});
     D.ranking($('orgRankRate'), list.map(function(d){ return {name:d.name, value:Math.round(d.成交率*10)/10, sub:D.fmtInt(d.客户数)+' 客户'}; }), {percent:true, color:cvar(2), valueLabel:'成交率'});
-    D.ranking($('orgRankAov'), list.filter(function(d){ return d.成交客户>0; }).map(function(d){ return {name:d.name, value:Math.round(d.客单价), sub:'投产 '+d.投产.toFixed(2)+'x'}; }), {money:true, color:cvar(4), valueLabel:'客单价'});
+    D.ranking($('orgRankAov'), list.filter(function(d){ return d.成交客户>0; }).map(function(d){ return {name:d.name, value:Math.round(d.客单价), sub:d.广告费>0?('投产 '+d.投产.toFixed(2)+'x'):'未填广告费'}; }), {money:true, color:cvar(4), valueLabel:'客单价'});
 
     var tblRows = list.map(function(d){
       return {name:d.name, 客户数:d.客户数, 对接数:d.对接数, 观课数:d.观课数, 成交客户:d.成交客户,
               成交金额:d.成交金额, 成交率:d.成交率, 客单价:Math.round(d.客单价), 广告费:d.广告费,
-              投产:Math.round(d.投产*100)/100, 二轮复购率:d.首轮客户?d.二轮复购率:null};
+              /* 没填广告费的单位不给投产比，否则会显示成 0 被当作"投产为 0" */
+              投产:d.广告费>0?Math.round(d.投产*100)/100:null,
+              二轮复购率:d.首轮客户?d.二轮复购率:null};
     });
     var all = agg(rows);
     D.dataTable({thead:$('orgThead'), tbody:$('orgTbody'), tfoot:$('orgTfoot'), rows:tblRows, cols:ORG_COLS,
       totals:{客户数:all.客户数,对接数:all.对接数,观课数:all.观课数,成交客户:all.成交客户,成交金额:all.成交金额,
-              成交率:all.成交率,客单价:Math.round(all.客单价),广告费:all.广告费,投产:Math.round(all.投产*100)/100,二轮复购率:all.二轮复购率}});
-    $('orgTblNote').textContent = '按'+dim+'汇总，共 '+tblRows.length+' 个单位';
+              成交率:all.成交率,客单价:Math.round(all.客单价),广告费:all.广告费,
+              投产:cov.hasAny?Math.round(all.投产*100)/100:null,二轮复购率:all.二轮复购率}});
+    orgRoiText = cov.hasAny ? all.投产.toFixed(2) : '—';
+    patchOrgFoot();
+    if (!orgFootObs && window.MutationObserver){
+      orgFootObs = new MutationObserver(patchOrgFoot);
+      orgFootObs.observe($('orgTfoot'), {childList:true, subtree:true, characterData:true});
+    }
+    $('orgTblNote').textContent = '按'+dim+'汇总，共 '+tblRows.length+' 个单位' +
+      (cov.partial ? '　·　'+adWarnText(cov)+'，投产比一列只对已填报的单位有效' : '');
   }
 
+  /* 客户明细：AirScript 导出的 29 列全部展示（含空列），横向滚动查看 */
   var DT_COLS = [
-    {key:'订单号',label:'订单号'},{key:'创建时间',label:'创建时间'},{key:'战区',label:'战区'},
-    {key:'轮次',label:'轮次'},{key:'部门',label:'部门'},{key:'组别',label:'组别'},{key:'员工',label:'员工'},
-    {key:'客户姓名',label:'客户姓名'},{key:'客户分类',label:'客户分类',pill:function(){return 'c';}},
-    {key:'引流渠道',label:'渠道'},{key:'出单类型',label:'出单类型'},{key:'地址区域',label:'区域'},
-    {key:'是否对接',label:'对接'},{key:'是否观课',label:'观课'},
-    {key:'首轮成交金额',label:'首轮金额',type:'money'},{key:'二轮成交金额',label:'二轮金额',type:'money'},
-    {key:'三轮成交金额',label:'三轮金额',type:'money'},{key:'往期单量',label:'往期单量',type:'int'},
-    {key:'往期金额',label:'往期金额',type:'money'},{key:'总金额',label:'总金额',type:'money'},
-    {key:'广告费',label:'广告费',type:'money'},{key:'当下客户状态',label:'客户状态'}
+    {key:'战区',label:'战区'},
+    {key:'订单号',label:'订单号'},
+    {key:'部门',label:'部门'},
+    {key:'组别',label:'组别'},
+    {key:'员工',label:'员工'},
+    {key:'引流渠道',label:'引流渠道'},
+    {key:'轮次',label:'轮次'},
+    {key:'轮次负责人',label:'轮次负责人'},
+    {key:'客户姓名',label:'客户姓名'},
+    {key:'客户分类',label:'客户分类',pill:function(){return 'c';}},
+    {key:'出单类型',label:'出单类型'},
+    {key:'地址区域',label:'地址区域'},
+    {key:'转介绍',label:'转介绍'},
+    {key:'订单金额',label:'订单金额',type:'money'},
+    {key:'是否对接',label:'是否对接'},
+    {key:'是否观课',label:'是否观课'},
+    {key:'最新沟通日期',label:'最新沟通日期'},
+    {key:'当下客户状态',label:'当下客户状态'},
+    {key:'首轮是否成交',label:'首轮是否成交'},
+    {key:'首轮成交金额',label:'首轮成交金额',type:'money'},
+    {key:'二轮是否成交',label:'二轮是否成交'},
+    {key:'二轮成交金额',label:'二轮成交金额',type:'money'},
+    {key:'三轮是否成交',label:'三轮是否成交'},
+    {key:'三轮成交金额',label:'三轮成交金额',type:'money'},
+    {key:'往期单量',label:'往期单量',type:'int'},
+    {key:'往期金额',label:'往期金额',type:'money'},
+    {key:'总金额',label:'总金额',type:'money'},
+    {key:'广告费',label:'广告费',type:'money'},
+    {key:'创建时间',label:'创建时间'}
   ];
   var activeCols = DT_COLS;
   function renderDetailView(rows){
     var f = state.dtFilter;
-    var show = f==='deal' ? rows.filter(isDeal) : (f==='nodeal' ? rows.filter(function(r){ return !isDeal(r); }) : rows);
-    var cols = DT_COLS.filter(function(c){
-      if (c.type) return show.some(function(r){ return num(r[c.key])!==0; });
-      return show.some(function(r){ return r[c.key]!=null && r[c.key]!==''; });
-    });
-    activeCols = cols;
+    var show = f==='deal' ? rows.filter(function(r){ return !r.__blank && isDeal(r); })
+             : (f==='nodeal' ? rows.filter(function(r){ return !r.__blank && !isDeal(r); }) : rows);
+    activeCols = DT_COLS;
+    /* 合计行只对数值列（money / int）求和，文本列留空 */
     var totals={};
-    cols.forEach(function(c){ if (c.type==='money'||c.type==='int') totals[c.key]=D.sum(show,c.key); });
-    D.dataTable({thead:$('dtThead'), tbody:$('dtTbody'), tfoot:$('dtTfoot'), rows:show, cols:cols, totals:totals});
-    $('dtNote').textContent = show.length + ' 条记录（已随顶部筛选联动）';
+    DT_COLS.forEach(function(c){
+      if (c.type==='money'||c.type==='int') totals[c.key]= show.reduce(function(a,r){ return a+n0(r[c.key]); },0);
+    });
+    D.dataTable({thead:$('dtThead'), tbody:$('dtTbody'), tfoot:$('dtTfoot'), rows:show, cols:DT_COLS, totals:totals});
+    var blanks = show.filter(function(r){ return r.__blank; }).length;
+    $('dtNote').textContent = show.length + ' 条记录 · ' + DT_COLS.length + ' 列（可横向滚动，点表头排序）' +
+      (blanks ? '　·　其中 ' + blanks + ' 条为空行（只有创建时间），已排除在所有指标之外' : '');
     window.__detailRows = show;
   }
 
   var VIEWS = {
-    overview:{title:'会员总览',desc:'会员客户台账的成交与结构全景',fn:renderOverview},
-    deal:{title:'成交分析',desc:'首轮 / 复购 / 往期的多轮成交拆解',fn:renderDeal},
-    structure:{title:'客户结构',desc:'客户画像、渠道质量与地区分布',fn:renderStructure},
-    org:{title:'组织效能',desc:'部门 / 组别 / 员工的成交效率对比',fn:renderOrg},
-    detail:{title:'客户明细',desc:'台账原始记录，可排序、可导出',fn:renderDetailView}
+    overview:{title:'会员总览',desc:'会员客户台账的成交与结构全景',fn:renderOverview,metric:true},
+    deal:{title:'成交分析',desc:'首轮 / 复购 / 往期的多轮成交拆解',fn:renderDeal,metric:true},
+    structure:{title:'客户结构',desc:'客户画像、渠道质量与地区分布',fn:renderStructure,metric:true},
+    org:{title:'组织效能',desc:'部门 / 组别 / 员工的成交效率对比',fn:renderOrg,metric:true},
+    detail:{title:'客户明细',desc:'台账原始记录，可排序、可导出',fn:renderDetailView,metric:false}
   };
   function renderAll(){
-    var rows = filtered();
-    $('fCount').textContent = rows.length+' / '+state.rows.length+' 条记录';
-    $('badgeAll').textContent = rows.length;
-    $('badgeDetail').textContent = rows.length;
+    var all = filtered();
+    /* 大量只有创建时间的空行：进明细表可以，但不能污染任何指标 */
+    var metric = all.filter(function(r){ return !r.__blank; });
+    state.metricRows = state.rows.filter(function(r){ return !r.__blank; });
+    var blanks = all.length - metric.length;
+    $('fCount').textContent = metric.length+' / '+state.rows.length+' 条参与指标' +
+      (blanks ? '（另有 '+blanks+' 条空行仅进明细）' : '');
+    $('badgeAll').textContent = metric.length;
+    $('badgeDetail').textContent = all.length;
     var v = VIEWS[state.view];
     $('viewTitle').textContent = v.title;
     $('viewDesc').textContent = v.desc;
     Object.keys(VIEWS).forEach(function(k){ $('view-'+k).hidden = (k!==state.view); });
-    try{ v.fn(rows); }catch(e){ console.error(e); }
+    try{ v.fn(v.metric ? metric : all); }catch(e){ console.error(e); }
   }
   function setView(v){
     state.view=v;
     [].forEach.call(document.querySelectorAll('.navitem'), function(b){ b.setAttribute('aria-current', b.dataset.view===v?'true':'false'); });
     renderAll();
   }
+
   function load(payload){
-    state.rows = (payload.detail||[]).map(function(r){
+    var detail = payload.detail||[];
+    state.rows = detail.map(function(r){
       var o={}; for (var k in r) o[k]=r[k];
-      o.创建时间 = D.dateStr(r.创建时间)||r.创建时间||'';
+      /* 日期统一成 YYYY-MM-DD；序列号 / ISO / 文本三种形态都在 mDateStr 里收口 */
+      var cs = mDateStr(r.创建时间);
+      o.创建时间 = cs || (isBlank(r.创建时间) ? '' : String(r.创建时间));
+      o.__date = cs;
+      if ('最新沟通日期' in o){
+        var ls = mDateStr(r.最新沟通日期);
+        o.最新沟通日期 = ls || (isBlank(r.最新沟通日期) ? '' : String(r.最新沟通日期));
+      }
+      o.__blank = isBlankRow(r);
       return o;
     });
+    state.blankCount = state.rows.filter(function(r){ return r.__blank; }).length;
+    state.metricRows = state.rows.filter(function(r){ return !r.__blank; });
     state.meta = payload.meta||{};
+
     $('emptyState').hidden=true; $('filterBar').hidden=false;
-    $('brandSub').textContent = (state.meta.zone||'未知战区')+' · '+state.rows.length+' 条记录';
+    var zones = D.uniqVals(state.rows,'战区');
+    var zoneLabel = state.meta.zone || (zones.length ? zones.join('、') : '未知战区');
+    if (zones.length > 1) zoneLabel += '（'+zones.length+' 个战区）';
+    $('brandSub').textContent = zoneLabel + ' · ' + state.rows.length + ' 条记录' +
+      (state.blankCount ? '（含 '+state.blankCount+' 条空行）' : '');
+    $('brandSub').title = zoneLabel + ' · 共 ' + state.rows.length + ' 条记录，其中 ' +
+      state.metricRows.length + ' 条参与指标计算';
     $('navFoot').innerHTML = '数据来源：<b>'+D.esc(state.meta.source||'—')+'</b><br>生成时间：'+
       (state.meta.generatedAt? new Date(state.meta.generatedAt).toLocaleString('zh-CN'):'—');
     populateFilters(state.rows);
     setView(state.view);
     try{ localStorage.setItem(STORE, JSON.stringify(payload)); }catch(e){}
+    return { total: state.rows.length, metric: state.metricRows.length, blank: state.blankCount, zones: zones };
   }
 
   [].forEach.call(document.querySelectorAll('.navitem'), function(b){
@@ -1522,20 +1884,25 @@ var DASH = (function(){
   $('btnCancel').addEventListener('click', function(){ dlg.close(); });
   $('btnConfirm').addEventListener('click', function(){
     var txt=$('jsonInput').value.trim();
-    if (!txt){ $('importMsg').textContent='请先粘贴 JSON'; $('importMsg').className='msg err'; return; }
+    if (!txt){ $('importMsg').textContent='请先粘贴 WPS 脚本日志（「一键复制日志」的整段内容）'; $('importMsg').className='msg err'; return; }
     try{
-      var obj = D.parsePayload(txt);
-      load(obj);
-      $('importMsg').textContent='导入成功，共 '+obj.detail.length+' 条记录';
+      var obj = parseImport(txt);
+      var info = load(obj);
+      $('importMsg').textContent='导入成功：'+info.zones.join('、')+'　共 '+info.total+' 条记录'+
+        (info.blank ? '（'+info.metric+' 条参与指标，'+info.blank+' 条空行仅进明细）' : '');
       $('importMsg').className='msg ok';
-      setTimeout(function(){ dlg.close(); }, 600);
-    }catch(e){ $('importMsg').textContent='解析失败：'+e.message; $('importMsg').className='msg err'; }
+      setTimeout(function(){ dlg.close(); }, 900);
+    }catch(e){
+      $('importMsg').textContent='导入失败 — '+e.message;
+      $('importMsg').className='msg err';
+      console.error('[会员看板] 导入失败', e);
+    }
   });
   $('btnSample').addEventListener('click', function(){ load(sample()); });
   $('btnSample2').addEventListener('click', function(){ load(sample()); });
   $('btnClear').addEventListener('click', function(){
     try{ localStorage.removeItem(STORE); }catch(e){}
-    state.rows=[]; $('emptyState').hidden=false; $('filterBar').hidden=true;
+    state.rows=[]; state.metricRows=[]; $('emptyState').hidden=false; $('filterBar').hidden=true;
     Object.keys(VIEWS).forEach(function(k){ $('view-'+k).hidden=true; });
     $('brandSub').textContent='未导入数据';
   });
@@ -1554,6 +1921,13 @@ var DASH = (function(){
     a.download='会员客户明细_'+new Date().toISOString().slice(0,10)+'.csv';
     document.body.appendChild(a); a.click(); a.remove();
   });
+
+  /* 自检钩子：浏览器端回归测试用 */
+  window.__MEMBER__ = {
+    state:state, agg:agg, dealAmt:dealAmt, dealAmtSource:dealAmtSource, isDeal:isDeal,
+    adCoverage:adCoverage, mYes:mYes, mDateStr:mDateStr, isBlank:isBlank, isBlankRow:isBlankRow,
+    parseImport:parseImport, filtered:filtered, byDim:byDim, DT_COLS:DT_COLS
+  };
 
   try{
     var saved=localStorage.getItem(STORE);
