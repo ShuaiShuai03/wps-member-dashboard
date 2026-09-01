@@ -631,14 +631,14 @@ var DASH = (function(){
       var convPrev = i===0?100:rate(s.value||0, stages[i-1].value||0);
       bindTip(p, (function(s,convPrev,convFromTop,i){ return function(){
         return '<b>'+esc(s.stage)+'</b><br><span class="k">数量</span>'+fmtInt(s.value)+
-               '<br><span class="k">较上一阶段</span>'+pct(convPrev)+
+               (s.note ? '' : '<br><span class="k">较上一阶段</span>'+pct(convPrev)) +
                '<br><span class="k">占首阶段</span>'+pct(convFromTop);
       };})(s,convPrev,convFromTop,i));
       svg.appendChild(p);
       var lab = svgEl('text',{x:labelW-12, y:y+h/2+4, 'text-anchor':'end', class:'fnl-label'}); lab.textContent = s.stage; svg.appendChild(lab);
       var val = svgEl('text',{x:W-valW+10, y:y+h/2, class:'fnl-val'}); val.textContent = (s.money?money(s.value):fmtInt(s.value)); svg.appendChild(val);
       var cv = svgEl('text',{x:W-valW+10, y:y+h/2+14, class:'fnl-conv'});
-      cv.textContent = i===0 ? '基数 100%' : ('环节 '+pct(convPrev)+' · 累计 '+pct(convFromTop));
+      cv.textContent = i===0 ? '基数 100%' : (s.note ? s.note : ('环节 '+pct(convPrev)+' · 累计 '+pct(convFromTop)));
       svg.appendChild(cv);
     });
     host.appendChild(svg);
@@ -1230,6 +1230,9 @@ var DASH = (function(){
       {stage:'客户总数',value:s.客户数},{stage:'首轮成交',value:s.首轮客户},
       {stage:'二轮成交',value:s.二轮客户},{stage:'三轮成交',value:s.三轮客户}
     ], 'var(--s1)');
+    // 往期成交并非首轮的下游，单独用一条说明补充，不塞进漏斗造成 >100% 的环节率
+    $('dlFunnel').appendChild(D.el('div','empty-chart',
+      '另有往期成交 '+D.fmtInt(s.往期客户)+' 人 / '+D.money(s.往期金额)+'（不在上述串行链路内）'));
 
     var rs = rounds(rows), depts = D.uniqVals(rows,'部门');
     D.heatmap($('dlHeat'), depts, rs, depts.map(function(d){
