@@ -270,6 +270,7 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
   background:var(--surface-2);border:1px solid var(--line)}
 .hintbar b{color:var(--ink);font-weight:700}
 .dnote{margin-top:8px;font-size:11.5px;line-height:1.55;color:var(--ink-3);text-align:center;max-width:230px}
+.donut-col .empty-chart{padding:10px 0 0;max-width:230px;font-size:12px;line-height:1.55}
 /* 29 列明细：让表格按内容撑开，横向滚动条常显可用 */
 #view-detail table{width:max-content;min-width:100%}
 </style>
@@ -382,7 +383,7 @@ dialog::backdrop{background:rgba(8,12,18,.55)}
           </section>
         </div>
         <section class="card full">
-          <header><h2>占比结构</h2><span class="note">广告费、成交金额、客户数、成交单量与投产的部门分布</span></header>
+          <header><h2>占比结构</h2><span class="note">广告费、成交金额、客户数、成交单量与投产的部门分布；末图口径随投产自适应（≥1 看净产出分配，&lt;1 看成交金额占比 + 图例倍数）</span></header>
           <div class="donutgrid" id="ovDonuts"></div>
         </section>
       </section>
@@ -1593,32 +1594,95 @@ var DASH = (function(){
 
     /* 占比结构 —— 部门维度，「未填写」不进饼图 */
     var dh = $('ovDonuts'); D.clear(dh);
-    function pick(key, opts){
-      donutWithNote(dh, shareRows(rows,'部门',function(d){ return d[key]; }), opts);
-    }
-    pick('广告费',   {title:'广告费占比（按部门）',   centerLabel:'总广告费', money:true});
-    pick('成交金额', {title:'成交金额占比（按部门）', centerLabel:'成交总额', money:true});
-    pick('客户数',   {title:'客户数占比（按部门）',   centerLabel:'客户总数'});
-    pick('成交客户', {title:'成交客户占比（按部门）', centerLabel:'成交客户'});
-
-    /* 投产比是比率，各部门相加无意义，故用「净产出（成交金额−广告费）」作扇区 */
-    var netRows = tint(dd.filter(function(d){ return d.name!=='未填写' && d.广告费>0; }).map(function(d){
-      return {name:d.name, value:d.成交金额 - d.广告费, roi:d.投产};
-    }).filter(function(r){ return num(r.value)>0; }), '部门');
-    if (netRows.length){
-      D.donut(dh, netRows, {title:'投产贡献占比（净产出）', centerLabel:'综合投产', money:true});
+    /* 这一组固定 5 个图。某一项全为空时也要保留位置并写清楚为什么是空的，
+       不能整块消失 —— 少一个图会让人以为看板坏了，而不是数据没填。 */
+    function pick(key, opts, emptyText){
+      var sr = shareRows(rows,'部门',function(d){ return d[key]; });
+      if (donutWithNote(dh, sr, opts)) return;
+      D.donut(dh, [], opts);
       var col = dh.lastElementChild;
-      var cv = col.querySelector('.donut-center .v'), cl = col.querySelector('.donut-center .l');
-      if (cv) cv.textContent = (cov.hasAny? s.投产.toFixed(2)+'x' : '—');
-      if (cl) cl.textContent = '综合投产';
-      var legRows = netRows.slice().sort(function(a,b){ return num(b.value)-num(a.value); });
+      if (col) col.appendChild(D.el('div','empty-chart', emptyText));
+    }
+    pick('广告费',   {title:'广告费占比（按部门）',   centerLabel:'总广告费', money:true},
+         '当前筛选下没有任何部门填报广告费');
+    pick('成交金额', {title:'成交金额占比（按部门）', centerLabel:'成交总额', money:true},
+         '当前筛选下没有任何部门产生成交金额');
+    pick('客户数',   {title:'客户数占比（按部门）',   centerLabel:'客户总数'},
+         '当前筛选下没有可归属到部门的客户');
+    pick('成交客户', {title:'成交客户占比（按部门）', centerLabel:'成交客户'},
+         '当前筛选下没有任何部门产生成交客户');
+
+    /* ---- 第 5 图：投产结构。自适应两种形态，任何数据下都必须画得出来 ----
+       形态 A（整体投产 ≥ 1 且存在净产出为正的部门）：扇区 = 净产出（成交金额−广告费），
+              这是「谁真正赚回了钱」的分配口径。
+       形态 B（整体投产 < 1 / 没有净产出为正的部门 / 广告费没填）：净产出全为负，无法作扇区，
+              改为按成交金额占比展示（可加、永远非负），投产倍数放到图例，口径写在图注里。
+       两种形态中心都显示综合投产比，图例都带各部门倍数。 */
+    paintRoiDonut(dh, dd, s, cov, warn);
+  }
+
+  /* 各部门的投产倍数文案（没填广告费的不能显示 0x，会被误读成投产为 0） */
+  function roiTag(d){
+    return num(d.广告费) > 0 ? num(d.投产).toFixed(2) + 'x' : '未填广告费';
+  }
+  function paintRoiDonut(dh, dd, s, cov, warn){
+    var depts = dd.filter(function(d){ return d.name !== '未填写'; });
+    var dropped = dd.filter(function(d){ return d.name === '未填写'; })
+                    .reduce(function(a,d){ return a + num(d.客户数); }, 0);
+    var centerText = cov.hasAny ? num(s.投产).toFixed(2) + 'x' : '—';
+
+    /* 候选：净产出为正的部门（必须填了广告费才谈得上净产出） */
+    var netAll = depts.filter(function(d){ return num(d.广告费) > 0; });
+    var netPos = netAll.filter(function(d){ return num(d.成交金额) - num(d.广告费) > 0; });
+    var formA  = cov.hasAny && num(s.投产) >= 1 && netPos.length > 0;
+
+    var title, segs, notes = [];
+    if (formA){
+      title = '投产贡献占比（净产出）';
+      segs  = netPos.map(function(d){
+        return {name:d.name, value:num(d.成交金额) - num(d.广告费), tag:roiTag(d)};
+      });
+      var negN = netAll.length - netPos.length;
+      if (negN > 0) notes.push('已排除 ' + negN + ' 个净产出为负的部门（其成交金额低于广告费，不参与净产出分配）');
+    } else {
+      title = '投产对比（按成交金额）';
+      segs  = depts.filter(function(d){ return num(d.成交金额) > 0; })
+                   .map(function(d){ return {name:d.name, value:num(d.成交金额), tag:roiTag(d)}; });
+      if (!cov.hasAny){
+        notes.push('广告费未填报，无法计算投产，此处按各部门成交金额占比展示');
+      } else if (num(s.投产) < 1){
+        notes.push('本期整体投产 < 1，无净产出可分配，故按成交金额占比展示，倍数见图例');
+      } else {
+        notes.push('没有任何部门的净产出为正，无净产出可分配，故按成交金额占比展示，倍数见图例');
+      }
+    }
+
+    /* 兜底：连成交金额都没有 —— 仍然画出这一列，只是给明确空状态，绝不整块消失 */
+    var empty = !segs.length;
+    D.donut(dh, empty ? [] : tint(segs, '部门'), {title:title, centerLabel:'综合投产', money:true});
+    var col = dh.lastElementChild;
+    if (!col) return;
+    var cv = col.querySelector('.donut-center .v'), cl = col.querySelector('.donut-center .l');
+    if (cv) cv.textContent = centerText;
+    if (cl) cl.textContent = '综合投产';
+
+    if (empty){
+      col.appendChild(D.el('div','empty-chart','当前筛选下没有任何部门产生成交金额，无法展示投产结构'));
+      notes = [];
+      if (cov.hasAny) notes.push('综合投产 ' + centerText + '（成交金额 ÷ 广告费）');
+    } else {
+      /* 图例每行追加该部门的投产倍数：core 的图例按 value 降序取前 6 行 */
+      var legRows = segs.slice().sort(function(a,b){ return num(b.value) - num(a.value); });
       Array.prototype.forEach.call(col.querySelectorAll('.dlegend .r'), function(node, i){
         var r = legRows[i]; if (!r) return;
         var n = node.querySelector('.n');
-        if (n) n.textContent = r.name + ' · ' + num(r.roi).toFixed(2) + 'x';
+        if (n) n.textContent = r.name + ' · ' + r.tag;
       });
-      if (warn) col.appendChild(D.el('div','dnote', warn + '，只统计了已填报广告费的部门'));
     }
+
+    if (dropped > 0) notes.push('占比已过滤「未填写」' + D.fmtInt(dropped) + ' 行，不计入上方百分比');
+    if (warn) notes.push(warn);
+    notes.forEach(function(t){ col.appendChild(D.el('div','dnote', t)); });
   }
 
   function renderDeal(rows){
